@@ -2023,3 +2023,191 @@ API资源对象管理：
         1.--kubeconfig选项
         2.kubeconfig环境变量：其值是包含有kubeconfig文件的列表
         3.默认路径：$HOME/.kube/config
+
+
+    设定kubeconfig文件：kubectl config SUBCOMMAND
+        1.打印加载的kubeconfig
+            view
+        2.cluster相关的子命令
+            get-cluster
+            set-cluster
+            delete-cluster
+        3.user相关命令
+            get-users
+            set-credentials
+            delete-user
+        4.context相关的子命令
+            get-contexts
+            set-context
+            delete-context
+            rename-context
+        5.current-context相关的子命令:默认的用户凭据
+            current-context
+            use-context
+
+    k8s api server 的账号：
+        User Account:非由API Server，由管理员自行配置其对接外部的认证系统来完成的，相关的账号由外部的认证服务负责管理
+            static token
+            X509客户端证书认证
+            OIDC
+            可以了解下：keycloak
+
+        Service Account:由API Server自行管理，ServiceAccount就是API Server上的标准资源类型
+
+    例如：设定kubeconfig文件
+        1.定义Cluster
+            提供包括集群名称、api Server URL和信任的CA的证书相关配置；cluster配置段中的各列表项名称需要唯一；
+            命令：kuectl config set-cluster kube-test --embed-certs=true --certificate-authority=/etc/kubernetes/pki.ca.crt --server="https://kubeapi.wjs.com:6443" --kubeconfig=$HOME/.kube/kubeconfig
+            注意：--kubeconfig不知道，默认是：$HOME/.kube/config
+            
+        2、定义User
+            添加身份凭证，使用静态令牌文件认证的客户端提供令牌
+            命令：kubectl config set-credentials wjs --token="$wjs_TOKEN" --kubeconfig=$HOME/.kube/kubernetes.conf
+
+        3.定义Context
+            为用户wjs的身份凭据与kube-test集群建立映射关系
+            命令：kubectl config set-context wjs@kube-test --cluster=kube-test --user=wjs --kubeconfig=$HOME/.kube/kubernetes.conf
+        
+        4.设定Current-context
+            命令：kubectl config use-context wjs@kube-test --kubeconfig=$HOME/.kube/kubernetes.conf
+
+    例如：设定kubeconfig文件：基于X509客户端证书认证的wjs用户添加至kubeusers.conf文件中，同一个列表下，不同项的名称不能相同
+        1.定义Cluster
+            使用不同的身份凭据访问同一集群时，集群相关的配置无须重复定义
+
+        2、定义User
+            添加身份凭据，基于X509客户端证书认证时，需要提供客户端证书和私钥
+
+        3.定义Context
+            为用户wjs的身份凭据与kube-test集群建立映射关系
+            命令：kubectl config set-context wjs@kube-test --cluster=kube-test --user=wjs --kubeconfig=$HOME/.kube/kubeusers.conf
+
+        4.设定Current-context
+            命令：kubectl config use-context wjs@kube-test --kubeconfig=$HOME/.kube/kubeusers.conf
+
+    合并kubeconfig文件：
+        客户端能够通过多种途径获取到kubeconfig文件时，将遵循如下逻辑进行文件合并
+            1、设置了--kubeconfig参数时，则仅使用指定的文件，且不进行合并；将参数只能使用一次；
+            2、否则，若设置了kubeconfig环境变量，则将其值用作合并的文件列表；处理规则
+                忽略不存的文件
+                遇到内容无法反序列化的文件时，将生成错误信息
+                文件列表中，第一个设定了特定值或映射键的文件是为生效文件
+                    修改某个映键的值时，将修改列表中第一个出现该键的文件中的内容
+                    创建一个键时，其将保存于列表中的第一个文件中
+                    若列表中指定的文件均不存在时，则自动创建列表中的最后一个文件
+        
+        context的判定机制
+            1.若使用了--context选项，则加载该选项指定要使用的上下文
+            2.否则，将使用合并后的kubeconfig文件中的current-context的设定
+
+            
+
+# Service Account 资源及应用 
+    为什么需要Service Account
+        1. API Serice 同样需要对这类来自于Pod资源中客户端程序进行身份验证，Service Account也就是设计专用于这类场景的账号
+    在Pod上使用Service Account
+        1. 自动设定：Service Account 通常由API Server自动创建并通过Service Account 准入控制器自动关联到集群中创建的每个Pod上
+        2. 自定义：  在Pod规范上，使用serviceAccountName指定要使用的特点serviceAccount
+
+    由API Server自行管理，ServiceAccount就是API Server上的标准资源类型
+    
+    字段：imagePullSecret,可为Pod提供从私有image registry获取镜像时使用的认证凭证
+
+    为Pod提供从私有image registry获取时使用的认证凭证方法：
+        1.pods.spec.imagePullSecrets
+        2.pod.spec.serviceAccountName:指定使用的特有ServiceAccount,而后在ServiceAccount资源对象上，使用serviceaccounts.imagePullSecrets
+            推荐使用第二种方法，因为把secret从pod上解耦下来，更重要的是多个pod可以引用同一个serviceaccount资源，从而可以获取认证到私有image registry凭据，也就是可以共享给同一个应用目的下pod使用  
+
+    # serviceAccount资源类型
+        1.基于资源对象保存SerivceAccount的数据
+        2.认证信息保存与ServiceAccount对象专用的Secret中
+        3.录属于名称空间级别，专供集群上的Pod中的进程访问API Server时使用 
+            kubernetes基于三个组件完成Pod上serviceaccount的自动化
+                a.ServiceAccount Admission Controller  ：在Admission Controller组件中
+                b.Token Controller                     ：在controller manager组件中
+                c.ServiceAccount Controller            ：在controller manager组件中
+                也就是：当创建任何一个名称空间的时候，第一个组件会自动的在 某个 的名称空间下创建default ServiceAccount资源，随后在这个名称空间创建pod的时候，如果没有指定使用哪个专有的serviceaccount的，默认会使用default,这个过程是由ServiceAccount Admission Controller完成的
+                        创建default ServiceAccount本身或任何sa都有 ServiceAccount Controller 来管理，而每一个serviceaccount，无论是手动创建还是自动创建都会被 Token Controller 自动签发一个，生成一个Token
+                        对任何一个SA而言，都会生成一个token令牌，SA将持有该令牌，拿着该令牌认证给 API  Server，令牌是从哪里来，是由  ServiceAccount Admission Controller 或 ServiceAccount Controller 在创建SA的时候自动调用和附加的
+
+
+        4.需要用到特殊权限时，可为Pod指定要使用的自定义ServiceAccount资源对象
+
+    # pod如何引用SA上附加的认证凭据：
+        Secret卷：被挂在至一个固定路径；在该路径下将会存在三个文件
+            ca.crt：kubermetes root ca 的证书
+            namespace：生效的名称空间
+            token:认证令牌
+        Projected卷：将信息向内部的投射（/var/run/secrets/）
+            ServiceAccountToken：用于ServiceAccount的Token信息提供给Pod
+            configMap/kube-root-ca：将kubernetes root sa 自身的证书提供给Pod
+            downwardAPI：metadata.namespace，用于限制该SA可生效的名称空间
+                downwardAPI：特殊卷，只是引用kubernetes的信息
+    
+    # 操作：自己使用的serviceAccount，比如jenkins
+         kubectl create serviceaccount jenkins-admin -o yaml --dry-run=client
+         kubectl get sa -n prod 
+         编写pod：
+         [20:43:29 root@k8s-master01 ~]#cat jenkins-pod.yaml 
+            apiVersion: v1
+            kind: Pod
+            metadata:
+              name: jenkins-master
+              namespace: prod
+            spec:
+              serviceAccountName: jenkins-admin
+              containers:
+              - name: jenkins
+                image: ikubernetes/demoapp:v1.2
+
+            kubectl get pods -n prod -o yaml ：就可以看到 serviceAccountName 引用了 jenkins-admin
+
+        验证：
+            节点上也可以验证：
+                curl -k -H "Authorization:Bearer {token}" https://10.0.0.100:6443
+
+            pod内部也可以验证：
+                curl --cacert ca.crt -H "Authorization:Bearer ${cat token}" https://kubernetes.default/api/v1/pod/namespaces/{namespace}
+                                                                                                                            /default/
+            每个serviceaccount，被API Service认证为"system:serviceaccount:NAMESPACE:SA
+            
+            ServiceAccount用到的token，也可以被创建为kubeconfig文件，从而被kubectldemg其他客户端引用
+                kubectl config set-cluster cfc --server=https://kubernetes.default --certificate-authprity=ca.crt
+                kubectl config set-context cfc --cluster=cfc
+                kubectl config set-credentials user --token={serviceaccount_token}
+                kubectl config set-context cfc --user=user
+                kubectl config use-context cfc
+
+# RBAC 鉴权基础
+    1.支持的鉴权模块：
+        1.Node:专用的授权模块，它基于kubelet将要运行的Pod向kubelet进行授权
+        2.ABAC:太难了，{通过将属性，（包括资源属性、用户属性、对象和环境属性等)组合在一起的策略，将访问权限授予用户}
+        3.RBAC:基于企业内个人用户的角色来管理对计算机或忘了资源的访问的鉴权方法
+        4.Webhook: 用于支持同Kubernetes外部的授权机制进行集成
+    2.另外俩个特殊的鉴权模块是AlwaysDeny和AlwaysAllow
+
+    配置方法：
+        1.在kube-apiserver上使用 --authorization-mode 选项进行定义
+            kubeadm部署的集群，默认启用了Node和RBAC
+        2.多个模块彼此以逗号分隔
+
+
+    RABC基础该概念：
+        1.实体（Entity）：在RBAC也成为Subject,通常指的是User,Group或是ServiceAccount
+        2.角色：承载资源操作权限的容器
+        3.资源：在RBAC中也称为Object,指代表Subject期望操作的目标，例如 Secret、Pod及Service对象等
+            a.仅限于 /api/v1...及 /apis/<group>/<version>/...起始的路径
+            b.其他路径对应的端点均被视做 "非资源类请求"，例如 /api 或 /healthz等端点
+
+        3.动作: Subject可以于Object上执行的特定操作，具体的可用动作取决于kubernetes的定义：
+            资源型对象
+                只读操作：get、list、watch等
+                读写操作：create、update、patch、delete、deleteconllection等
+            非资源型端点仅支持get操作
+        4.角色绑定：将角色关联至实体上，它能够将橘色具体的操作权限赋予给实体
+
+        30分继续
+
+
+
+140.82.114.3 github.com
